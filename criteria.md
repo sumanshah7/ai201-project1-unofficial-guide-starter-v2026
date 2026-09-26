@@ -22,9 +22,14 @@ pipeline earns credit; *"80% seemed reasonable"* does not.
 For at least 4 of my 5 test questions, the retrieved chunks include one that
 contains the answer.
 
-**Why this target:**
-<!-- e.g. "One of my questions is about a topic only two documents mention, so
-     I expect that one to be hard." -->
+**Why this target:** My five questions each point at a single sentence or two
+inside one town's `##` section (e.g. Marchwood's closing hours, Halden Bay's
+parking times), and `city_guides` gives each fact exactly one home — there's no
+redundancy to fall back on the way there might be in a corpus where several
+documents mention the same thing. I expect one question to be the hard case:
+"how to get from Brightwater to Kestrelford without a car" pulls from both a
+town guide and the cross-cutting `guide_regional_transport.md`, so the answer
+depends on retrieval grabbing the right chunk from either document, not both.
 
 ---
 
@@ -32,9 +37,12 @@ contains the answer.
 
 Every answer the system produces names at least one source document.
 
-**Why this target:**
-<!-- Why all five and not four? What about your setup makes that achievable —
-     or what would have to go wrong for it not to be? -->
+**Why this target:** This is closer to a code guarantee than a probabilistic
+one — `generate.py`'s grounding instruction requires a citation on every
+non-refused answer, and the prompt only ever contains chunks that already carry
+their `source` filename. There's no path through the code where an answer gets
+generated without retrieved chunks attached to it, so I'm not hedging to 4 of 5
+the way I do for the retrieval and gate criteria.
 
 ---
 
@@ -49,48 +57,51 @@ in at least 4 of 5 tries.
      what happened into your run log. Swap them for your own if you'd rather —
      just keep five of them, or the "4 of 5" above has nothing to be 4 of. -->
 
-**Why this target:**
-<!-- What did your distances look like when you set the cutoff in Milestone 4?
-     Was there a clean gap, or did the two groups overlap? -->
+**Why this target:** `city_guides` is about travel logistics for a specific
+fictional region, and the `OUT_OF_SCOPE` questions (world capitals, diesel
+engines, ibuprofen dosage, Rust syntax) share no vocabulary with it at all, so I
+expect these to sit far past whatever cutoff I pick — this should be the
+easiest criterion to hit, not the hardest. I'm leaving it at 4 of 5 rather than
+5 of 5 because I haven't measured the actual distances yet (that's Milestone 4)
+and I'd rather leave room for one surprising overlap than claim a perfect score
+I haven't seen.
 
 ---
 
-## 4. Something about your chunks
+## 4. Chunks don't split a section across two pieces
 
-<!-- YOU WRITE THIS ONE.
+At least 4 of 5 chunks I sample with `python app.py chunks -n 5` contain one
+complete `##` section — heading plus its full paragraph — with no sentence cut
+in half at the start or the end.
 
-     How would you know if your chunks were the right size? Name something
-     countable or observable.
-
-     Examples of the right shape — don't copy these, they should come from
-     what you actually saw in Milestone 3:
-       - "At least 4 of 5 sampled chunks read as a complete thought, with no
-          sentence cut in half at either end."
-       - "No chunk is shorter than 200 characters, since anything below that
-          in my corpus turned out to be a heading with no content under it." -->
-
-
-
-**Why this target:**
-
-
+**Why this target:** Every document in `city_guides` is organized into labelled
+sections (Getting there, Eat and drink, When to go, ...), and in Milestone 1 I
+watched the starter's fixed 800-character chunker slice straight through those
+headings — 14 documents became 51 chunks with no respect for where a section
+started or ended. A chunk that stops mid-section is exactly the "too big"/"cut
+in the wrong place" failure the brief warns about, so measuring against section
+boundaries is the most direct way to check whether my Milestone 3 chunker
+actually fixed that.
 
 ---
 
-## 5. Your choice
+## 5. Cross-cutting answers cite both documents involved
 
-<!-- YOU WRITE THIS ONE TOO.
+For questions whose answer draws on both a town-specific guide and one of the
+five cross-cutting guides (`eating`, `walking`, `seasons`, `regional_transport`,
+`accessibility`), the answer names both source documents in at least 4 of 5
+such questions.
 
-     Pick something you actually care about getting right. It could be about
-     speed, about refusals, about a particular kind of question your corpus
-     handles badly, about source attribution being correct rather than merely
-     present — anything, as long as it names a number or an observable
-     outcome. -->
-
-
-
-**Why this target:**
-
+**Why this target:** `city_guides` is unusual among the three corpora in that
+the same fact is sometimes split across a town guide and a cross-cutting guide
+on purpose — Kestrelford's bus schedule appears in both
+`guide_kestrelford.md` and `guide_regional_transport.md`, worded slightly
+differently. A source line that names only one of the two isn't wrong exactly,
+but it's incomplete in a way that's specific to this corpus's structure, and
+it's the kind of error "every answer names a source" (criterion 2) would let
+through silently. I'm not requiring 5 of 5 because retrieval only returns the
+single best chunk per document region, so one of the two relevant chunks
+missing the cutoff is a real possibility, not just a tuning failure.
 
 
 ---
