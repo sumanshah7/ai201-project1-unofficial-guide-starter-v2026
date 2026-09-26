@@ -22,6 +22,7 @@ to it, write down what you saw, and move on. That's a real observation about
 your pipeline, not giving up.
 """
 
+import re
 from dataclasses import dataclass
 
 import config
@@ -80,24 +81,124 @@ def fallback_split(
     return chunks
 
 
+_HEADING_RE = re.compile(r"\n(?=## )")
+
+
+def _split_section_if_long(
+    title_line: str, heading: str, body: str, source: str, index: int
+) -> list[Chunk]:
+    """
+    One section, as its own chunk if it fits under CHUNK_SIZE, or sliced into
+    overlapping windows if it doesn't (rare — see the note in config.py).
+    Every piece keeps the document title and section heading as a prefix, so a
+    chunk read in isolation still says which town and which topic it's about.
+    """
+    prefix = f"{title_line}\n{heading}\n" if heading else f"{title_line}\n"
+    full = f"{prefix}{body}".strip()
+
+    if len(full) <= config.CHUNK_SIZE:
+        return [
+            Chunk(
+                text=full,
+                source=source,
+                index=index,
+                produced_by="chunker.py::split_documents",
+            )
+        ]
+
+    # Oversized section: window over the body, re-attaching the prefix to
+    # every window so each piece still stands on its own.
+    window = config.CHUNK_SIZE - len(prefix)
+    overlap = config.CHUNK_OVERLAP
+    pieces: list[Chunk] = []
+    start = 0
+    while start < len(body):
+        piece_body = body[start : start + window].strip()
+        if piece_body:
+            pieces.append(
+                Chunk(
+                    text=f"{prefix}{piece_body}".strip(),
+                    source=source,
+                    index=index + len(pieces),
+                    produced_by="chunker.py::split_documents",
+                )
+            )
+        start += window - overlap
+    return pieces
+
+
 def split_documents(documents: list[Document]) -> list[Chunk]:
     """
-    Split documents into chunks. ⚠️ REPLACE THE BODY OF THIS IN MILESTONE 3.
+    Split documents on their `##` section headings instead of on a raw
+    character count.
 
-    Right now it just calls the fallback. That is the plain, generic behaviour
-    the brief is talking about.
+    city_guides documents are organised by heading (Getting there, Eat and
+    drink, When to go, ...), and a fixed-size window cuts straight through
+    those — the starter's fallback turns 14 documents into 51 chunks with no
+    regard for where a section starts or ends. Splitting on the headings the
+    documents already have keeps each section's sentences together instead.
 
-    When you write your own strategy, set `produced_by` to
-    "chunker.py::split_documents" so your README's Sample Chunks section names
-    the right function. `app.py chunks` prints that string for you.
-
-    Things worth thinking about before you write any code:
-      - Are your documents short posts or long guides?
-      - Is the useful information in one sentence, or spread over a paragraph?
-      - Would splitting on paragraph breaks keep more thoughts intact than
-        splitting on a character count?
+    A few documents open with only a one-line title and little or no intro
+    paragraph before the first heading (e.g. `guide_eating.md`), so that intro
+    is folded into the first section rather than becoming a near-empty chunk
+    of its own. The same merge-forward rule applies to any section that comes
+    out under `config.MIN_CHUNK_CHARS` after that.
     """
-    return fallback_split(documents)
+    chunks: list[Chunk] = []
+    for doc in documents:
+        parts = _HEADING_RE.split(doc.text)
+        title_line = parts[0].splitlines()[0].strip()
+        intro = "\n".join(parts[0].splitlines()[1:]).strip()
+
+        # Each remaining part starts with its "## Heading" line.
+        raw_sections: list[tuple[str, str]] = []
+        for part in parts[1:]:
+            lines = part.strip().splitlines()
+            heading, body = lines[0], "\n".join(lines[1:]).strip()
+            raw_sections.append((heading, body))
+
+        if not raw_sections:
+            # No headings at all — the whole document is one chunk.
+            chunks.append(
+                Chunk(
+                    text=doc.text,
+                    source=doc.source,
+                    index=0,
+                    produced_by="chunker.py::split_documents",
+                )
+            )
+            continue
+
+        # Fold the title/intro into the first section rather than giving it
+        # its own chunk.
+        first_heading, first_body = raw_sections[0]
+        raw_sections[0] = (
+            first_heading,
+            f"{intro}\n\n{first_body}".strip() if intro else first_body,
+        )
+
+        # Merge any section under MIN_CHUNK_CHARS forward into its neighbour
+        # (backward if it's the last one) so no chunk is a heading with
+        # barely any content under it.
+        merged: list[tuple[str, str]] = []
+        for heading, body in raw_sections:
+            if merged and len(body) < config.MIN_CHUNK_CHARS:
+                prev_heading, prev_body = merged[-1]
+                merged[-1] = (prev_heading, f"{prev_body}\n\n{heading}\n{body}")
+            else:
+                merged.append((heading, body))
+        if len(merged) > 1 and len(merged[-1][1]) < config.MIN_CHUNK_CHARS:
+            last_heading, last_body = merged.pop()
+            prev_heading, prev_body = merged[-1]
+            merged[-1] = (prev_heading, f"{prev_body}\n\n{last_heading}\n{last_body}")
+
+        index = 0
+        for heading, body in merged:
+            pieces = _split_section_if_long(title_line, heading, body, doc.source, index)
+            chunks.extend(pieces)
+            index += len(pieces)
+
+    return chunks
 
 
 def describe(chunks: list[Chunk]) -> str:
