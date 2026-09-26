@@ -189,6 +189,20 @@ out unusually wide (0.359 vs. 0.835), we didn't need to move the threshold off
 its 0.6 default; I changed the comment in `config.py` to record the
 measurement instead of changing the number.
 
+**3.** Claude drafted my first pass at `questions.py` and `criteria.md`, and I
+pushed back on that — I didn't just accept criteria written for me without
+checking them. We went through each one the way the Milestone 2 breakout
+activity describes: for criterion 1, Claude ran each of my 5 questions through
+`python app.py ask --show-prompt`, and I read the actual retrieved chunks
+myself and judged hit-or-miss for each (all 5 turned out to contain the
+answer, better than the 4-of-5 target). I did the same for criterion 2
+(checked that every answer we'd run so far ended with a `Sources retrieved:`
+line) and criterion 3 (re-ran a second out-of-scope question myself and
+confirmed the refusal). For criteria 4 and 5 — the two I was supposed to write
+myself — I reviewed Claude's proposed wording against evidence from my own
+test runs (the sample chunks for 4, the multi-document source lists for 5) and
+chose to keep both once I could point to why each one held.
+
 <!-- ── Stretch features ─────────────────────────────────────────────────────
      Doing one? Say so here BEFORE you start. A feature this README never
      claims earns nothing.
