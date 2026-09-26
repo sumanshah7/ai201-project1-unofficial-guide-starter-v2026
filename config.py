@@ -51,9 +51,12 @@ TOP_K = 5               # how many chunks to pull back per question
 #
 # LOWER IS BETTER: 0.3 is a close match, 0.9 is unrelated.
 #
-# 0.6 is a reasonable starting point, not a right answer. Milestone 4 has you
-# measure your own two groups of distances and put the cutoff in the gap.
-# Most corpora land somewhere between 0.45 and 0.75.
+# Measured against city_guides post-chunking (Milestone 4): the 5 questions in
+# questions.py best-distanced between 0.306 and 0.359; the 5 in OUT_OF_SCOPE
+# best-distanced between 0.835 and 0.997. That's a wide, clean gap, so 0.6 —
+# the shipped starting point — sits comfortably in the middle of it rather
+# than needing to move. See README.md's Sample Answer section for the full
+# ten-row table.
 THRESHOLD = 0.6
 
 
