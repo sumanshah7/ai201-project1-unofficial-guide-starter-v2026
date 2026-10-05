@@ -46,6 +46,15 @@ MIN_CHUNK_CHARS = 180
 
 TOP_K = 5               # how many chunks to pull back per question
 
+# Unit 2's improvement. Pure semantic search missed guide_regional_transport.md's
+# "Buses" section for "how to get to Kestrelford without a car" — it ranked
+# that file's "Walking and cycling" section higher instead, since that wording
+# is closer in meaning even though "Buses" is closer in actual vocabulary.
+# With this on, store.py's search() fuses a BM25 keyword ranking in alongside
+# the semantic one (reciprocal rank fusion) so exact-term matches like this
+# have a chance to surface. See results/run_*_after.md for the measurement.
+HYBRID_SEARCH = True
+
 # The relevance gate. If the best chunk is further away than this, the system
 # refuses to answer instead of handing the model thin material.
 #

@@ -18,6 +18,7 @@ rest of the project if they were wrong:
 """
 
 import os
+import re
 import shutil
 from dataclasses import dataclass
 
@@ -183,13 +184,22 @@ def search(
     top_k: int | None = None,
     corpus: str | None = None,
     variant: str = "default",
+    hybrid: bool | None = None,
 ) -> list[Result]:
     """
     Retrieve the chunks closest in meaning to a question.
 
-    Returns them nearest-first, each with its distance.
+    Returns them nearest-first, each with its distance (always the cosine
+    distance from the embedding model — the relevance gate is calibrated
+    against that number, so hybrid re-ranking must never change it).
+
+    `hybrid` (default: config.HYBRID_SEARCH) adds a BM25 keyword pass on top
+    of the semantic one and fuses the two rankings, so a chunk with the right
+    literal terms can surface even when a different chunk scores closer in
+    pure meaning. See `_bm25_index` for the case this was built to fix.
     """
     top_k = top_k or config.TOP_K
+    hybrid = config.HYBRID_SEARCH if hybrid is None else hybrid
     name = config.collection_name(corpus, variant)
 
     try:
@@ -199,25 +209,93 @@ def search(
             f"No index called '{name}'. Run `python app.py index` first."
         ) from exc
 
-    raw = collection.query(
-        query_embeddings=embed([question]),
-        n_results=min(top_k, collection.count()),
-    )
+    total = collection.count()
+
+    # Semantic ranking over the whole collection, so every chunk has a real
+    # cosine distance regardless of which pass ends up placing it in top_k.
+    raw = collection.query(query_embeddings=embed([question]), n_results=total)
+    ids = raw["ids"][0]
+    docs = raw["documents"][0]
+    metas = raw["metadatas"][0]
+    dists = raw["distances"][0]
+
+    if hybrid and total > 0:
+        bm25, bm25_ids = _bm25_index(name, collection)
+        bm25_rank = {}
+        if bm25 is not None:
+            scores = bm25.get_scores(_tokenize(question))
+            order = sorted(range(len(bm25_ids)), key=lambda i: scores[i], reverse=True)
+            bm25_rank = {bm25_ids[rank_i]: pos for pos, rank_i in enumerate(order)}
+
+        # Reciprocal rank fusion: a chunk ranked highly by EITHER method
+        # scores well, without either method's raw score scale mattering.
+        k_rrf = 60
+        fused_order = sorted(
+            range(len(ids)),
+            key=lambda i: (
+                1 / (k_rrf + i + 1)
+                + 1 / (k_rrf + bm25_rank.get(ids[i], len(ids)) + 1)
+            ),
+            reverse=True,
+        )
+        order = fused_order[:top_k]
+
+        # `ids` is already sorted nearest-first by Chroma, so index 0 is the
+        # single closest chunk in the whole collection. The relevance gate's
+        # 0.6 cutoff is calibrated against the true best distance, not against
+        # whatever BM25 fusion happens to keep — if fusion ever bumped the
+        # nearest chunk out of top_k, the gate would silently check against
+        # the wrong number and could refuse a question it shouldn't. Guarantee
+        # it stays in, trading away the weakest fused slot if it's not there.
+        if 0 not in order:
+            order[-1] = 0
+    else:
+        order = list(range(min(top_k, total)))
 
     results: list[Result] = []
-    for text, meta, distance in zip(
-        raw["documents"][0], raw["metadatas"][0], raw["distances"][0]
-    ):
+    for i in order:
+        meta = metas[i]
         results.append(
             Result(
-                text=text,
+                text=docs[i],
                 source=str(meta.get("source", "unknown")),
                 label=f"{meta.get('source', 'unknown')}#{meta.get('index', 0)}",
-                distance=float(distance),
+                distance=float(dists[i]),
                 produced_by=str(meta.get("produced_by", "unknown")),
             )
         )
     return results
+
+
+_bm25_cache: dict[str, tuple] = {}
+
+
+def _tokenize(text: str) -> list[str]:
+    return re.findall(r"[a-z0-9]+", text.lower())
+
+
+def _bm25_index(name: str, collection):
+    """
+    Build (and cache) a BM25 index over every chunk in a collection.
+
+    Unit 2's improvement: semantic search alone missed the "Buses" section of
+    `guide_regional_transport.md` for "how to get to Kestrelford without a
+    car" — it ranked a "Walking and cycling" section from the same file higher
+    instead, because that wording is closer to the question in meaning even
+    though "Buses" is closer in actual vocabulary (Kestrelford, Brightwater,
+    "without a car"-adjacent terms). BM25 catches exact-term matches that
+    embedding similarity can glide past.
+    """
+    if name in _bm25_cache:
+        return _bm25_cache[name]
+
+    from rank_bm25 import BM25Okapi
+
+    data = collection.get(include=["documents", "metadatas"])
+    tokenized = [_tokenize(doc) for doc in data["documents"]]
+    bm25 = BM25Okapi(tokenized) if tokenized else None
+    _bm25_cache[name] = (bm25, data["ids"])
+    return _bm25_cache[name]
 
 
 def index_exists(corpus: str | None = None, variant: str = "default") -> bool:
