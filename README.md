@@ -203,6 +203,18 @@ myself — I reviewed Claude's proposed wording against evidence from my own
 test runs (the sample chunks for 4, the multi-document source lists for 5) and
 chose to keep both once I could point to why each one held.
 
+**4. (Unit 2)** I asked Claude to diagnose the criterion-5 miss and pick the
+Milestone 4 improvement. It proposed hybrid search (BM25 + semantic fusion)
+because the brief names that as the fix for exactly this failure mode
+(semantic search ranking a related-but-wrong chunk above the right one). While
+implementing it, Claude found and fixed a bug in its own first draft — fusing
+two rankings can knock the single closest chunk out of the returned top-k,
+which would have silently broken the relevance gate's 0.6 cutoff — before I'd
+even asked about it. After measuring, the "fix" didn't help the question it
+targeted and broke a previously-working one; I told Claude to report that
+honestly and keep the change in the code rather than quietly reverting to a
+version that looked better.
+
 <!-- ── Stretch features ─────────────────────────────────────────────────────
      Doing one? Say so here BEFORE you start. A feature this README never
      claims earns nothing.
@@ -218,111 +230,187 @@ chose to keep both once I could point to why each one held.
 
 ## Run Log — Before
 
-<!-- Your five criteria, three runs each. `python run_eval.py --label before`
-     runs the questions, puts the OUT_OF_SCOPE ones through the gate, and
-     writes it all into results/ for you. Targets come from criteria.md; the
-     verdict column is your call.
-
-     Criterion 3 is measured in one deterministic pass rather than three, so
-     the same number goes in all three run columns. That's correct, not lazy.
-
-     Milestone 1. -->
+Produced by `run_eval.py::main`, 3 runs per question, caching off. Full file:
+[`results/run_2026-10-04_2233_before.md`](results/run_2026-10-04_2233_before.md).
+No `scorer.py` existed yet, so every verdict below is me reading the actual
+answer text and judging hit/miss myself.
 
 | Criterion | Target | Run 1 | Run 2 | Run 3 | Verdict |
 |---|---|---|---|---|---|
-| 1. Retrieved chunk contains the answer | 4 of 5 |  |  |  |  |
-| 2. Every answer names a source | 5 of 5 |  |  |  |  |
-| 3. Gate stops out-of-corpus questions | 4 of 5 |  |  |  |  |
-| 4. | | | | | |
-| 5. | | | | | |
+| 1. Retrieved chunk contains the answer | 4 of 5 | 5/5 | 5/5 | 5/5 | MET |
+| 2. Every answer names a source | 5 of 5 | 5/5 | 5/5 | 5/5 | MET |
+| 3. Gate stops out-of-corpus questions | 4 of 5 | 5/5 | 5/5 | 5/5 | MET |
+| 4. Chunks don't split a section (sampled, static — not re-run per question) | 4 of 5 | 5/5 | 5/5 | 5/5 | MET |
+| 5. Cross-cutting answers cite both docs | 4 of 5 | 3/4* | 3/4* | 3/4* | MISSED |
 
-<!-- Underneath, paste the REAL output for each criterion from one of your
-     runs — the actual text your system produced, not a description of it.
-     Name the file and function that produced it. -->
+\* Only 4 of my 5 test questions actually involve a fact duplicated between a
+town guide and a cross-cutting guide (Q2, the Marchwood-station question,
+turns out to be answerable from `guide_marchwood.md` alone — nothing in
+`guide_eating.md` actually duplicates that specific fact). Of the 4 that do
+qualify, 3 cited both documents in every run and 1 (the Brightwater→Kestrelford
+question) cited only `guide_kestrelford.md` in all 3 runs.
+
+Real output — criterion 1 and 5, question "How can someone get from
+Brightwater to Kestrelford without a car?" (produced by `generate.py::answer_from_chunks`,
+chunks from `store.py::search`):
+
+```
+To get from Brightwater to Kestrelford without a car, someone can take a bus, which runs roughly hourly on weekdays, every two hours on Saturdays, and does not run on Sundays.
+
+Source: `guide_kestrelford.md`
+```
+
+This is a criterion-1 **hit** (the bus schedule is right there) and a
+criterion-5 **miss** (the same schedule also appears in
+`guide_regional_transport.md`'s "Buses" section, which never made it into the
+top-5 retrieved chunks — see the diagnosis below).
+
+Real output — criterion 3 (produced by `run_eval.py::check_out_of_scope`,
+`gate.py::check`):
+
+```
+refused  (best distance 0.997)  Who won the 1994 World Cup?
+-> gate refused 5 of 5
+```
 
 ## Verdicts
 
-<!-- MET or MISSED for each of the five, against the target you wrote last
-     unit — not a new one. Plus a sentence on how you decided. That sentence
-     matters most where it was close.
-
-     If your target said 4 of 5 and your runs came out 4, 3, 4, that's a MISS.
-     The target has to hold, not show up occasionally.
-
-     Milestone 2. -->
-
 | # | Criterion | Verdict | How I decided |
 |---|---|---|---|
-| 1 |  |  |  |
-| 2 |  |  |  |
-| 3 |  |  |  |
-| 4 |  |  |  |
-| 5 |  |  |  |
+| 1 | Retrieved chunk contains the answer | **MET** | Read all 5 questions' retrieved chunks myself against `python app.py ask --show-prompt`; all 5 contained the literal fact asked for, in all 3 runs. |
+| 2 | Every answer names a source | **MET** | Every one of the 15 answers (5 questions × 3 runs) ended with a named `.md` file, either inline or in a `Sources:` line. |
+| 3 | Gate stops out-of-corpus questions | **MET** | All 5 `OUT_OF_SCOPE` questions refused, distances 0.835–0.997, nowhere close to the 0.6 cutoff. |
+| 4 | Chunks don't split a section | **MET** | Unchanged from Unit 1 — same chunker, same 5 sampled chunks, all 5 complete `##` sections with no sentence cut off. |
+| 5 | Cross-cutting answers cite both docs | **MISSED** | Of the 4 test questions that genuinely involve a fact duplicated across a town guide and a cross-cutting guide, only 3 cited both — short of the "4 of 5" target no matter how you count the denominator. This is the closest call of the five, and I'm calling it a miss rather than rounding up, because the target says "4 of 5" and I can't produce a 4th hit by relabeling Q2 as a cross-cutting question when its answer never needed a second document. |
 
 ## Diagnoses
 
-<!-- For each miss: which stage caused it, and how. The stage alone isn't
-     enough — you need the mechanism.
+**Criterion 5 miss — retrieval stage.** For "How can someone get from
+Brightwater to Kestrelford without a car?", the bus-schedule fact appears in
+both `guide_kestrelford.md` ("Getting there") and `guide_regional_transport.md`
+("Buses"). Retrieval's top-5 included the Kestrelford copy but not the
+regional-transport copy — instead it pulled that file's "Walking and cycling"
+section, which is closer to the question in *meaning* ("without a car" reads
+semantically adjacent to "walking") even though "Buses" is the section that
+actually duplicates the answer. I confirmed this directly: `python app.py ask
+"..." --show-prompt` shows the five retrieved chunks, and
+`guide_regional_transport.md#1` (Buses) simply isn't one of them. The model
+answered correctly from what it had — this isn't a generation problem, the
+citation is just incomplete because the right chunk never reached it.
 
-     Not a diagnosis: "Question 3 didn't work."
-     A diagnosis:     "Question 3 asks about laundry costs. The answer is in
-                       one sentence that got split across two chunks, so
-                       neither chunk on its own contains it."
-
-     The five stages: loading → chunking → embedding → retrieval → generation.
-
-     Look for a pattern. If three misses all ask about numbers, that's one
-     problem, not three.
-
-     Missed nothing? Say so, then say honestly whether your targets were set
-     low, and which one you'd tighten and to what.
-
-     Milestone 3. -->
+No pattern across multiple questions here — this is the only miss, and it's a
+single specific gap (one document's two relevant sections competing for one
+retrieval slot) rather than something systemic. Worth noting on the "were my
+targets set too easy" question from Milestone 3: criteria 1–4 held at a
+stronger margin than I expected (5/5 against a 4/5 target, 3 times over) —
+if I rewrote this unit's criteria today I'd tighten 1 and 3 to 5 of 5, since
+nothing came close to failing them. Criterion 5 turned out to be the one with
+real signal in it.
 
 ## The Improvement
 
-**What I changed:**
+**What I changed:** Added hybrid search — `store.py::search` now runs a BM25
+keyword pass (`rank-bm25`, via a new `_bm25_index` function) alongside the
+existing semantic search and combines the two rankings with reciprocal rank
+fusion, gated by `config.HYBRID_SEARCH`. While building it I found and fixed a
+real bug it would have introduced: fusing rankings can push the single closest
+chunk (by cosine distance) out of the returned top-k, which would silently
+break the relevance gate's 0.6 cutoff, since the gate only ever sees the
+distances of whatever `search()` hands back. `search()` now guarantees the
+globally-nearest chunk always stays in the returned set regardless of how
+fusion re-ranks the rest.
 
-**Why I picked it:**
-
-<!-- Connect it to a specific diagnosis above in one sentence. If you can't,
-     you picked a fix because it sounded impressive. -->
+**Why I picked it:** The diagnosis pointed specifically at semantic search
+ranking a wrong-but-related chunk (walking/cycling) above the right one
+(buses) for a "without a car" query — exactly the failure mode the brief's own
+Milestone 4 menu says hybrid search is for: "when your questions contain
+names, numbers, or exact terms that semantic search glides past."
 
 ### Run Log — After
 
-<!-- Same format, same five criteria, three runs each.
-     `python run_eval.py --label after` -->
+Produced by `run_eval.py::main`, same 5 questions, 3 runs each, `HYBRID_SEARCH
+= True`. Full file: [`results/run_2026-10-04_2241_after.md`](results/run_2026-10-04_2241_after.md).
 
 | Criterion | Target | Run 1 | Run 2 | Run 3 | Verdict |
 |---|---|---|---|---|---|
-| 1. Retrieved chunk contains the answer | 4 of 5 |  |  |  |  |
-| 2. Every answer names a source | 5 of 5 |  |  |  |  |
-| 3. Gate stops out-of-corpus questions | 4 of 5 |  |  |  |  |
-| 4. | | | | | |
-| 5. | | | | | |
+| 1. Retrieved chunk contains the answer | 4 of 5 | 5/5 | 5/5 | 5/5 | MET |
+| 2. Every answer names a source | 5 of 5 | 5/5 | 5/5 | 5/5 | MET |
+| 3. Gate stops out-of-corpus questions | 4 of 5 | 5/5 | 5/5 | 5/5 | MET |
+| 4. Chunks don't split a section (unchanged — chunking wasn't touched) | 4 of 5 | 5/5 | 5/5 | 5/5 | MET |
+| 5. Cross-cutting answers cite both docs | 4 of 5 | 1/4 | 1/4 | 1/4 | MISSED (worse) |
 
-**Did it help?**
+Real output — the question hybrid search was supposed to fix, after the change
+(produced by `generate.py::answer_from_chunks`):
 
-<!-- Say plainly whether it did, and how you know. If it made things worse,
-     say that — a change that backfired, honestly reported, earns full credit
-     and is more interesting than one that worked. What matters is that you can
-     tell.
+```
+To get from Brightwater to Kestrelford without a car, you can take a bus, which runs roughly hourly on weekdays and every two hours on Saturdays (there is no bus service on Sundays). Alternatively, you can walk along the Kestrelford trackbed, which is a six-mile walking route following the old railway line.
 
-     Milestone 4. -->
+Source: `guide_kestrelford.md` and `guide_walking.md`
+```
+
+`guide_regional_transport.md` still never appears — it checked the BM25
+scores directly: the Buses section's actual text never uses the word "bus" at
+all (it says "service"), and shares only place names with the query, so it
+wasn't a strong keyword match either. Hybrid search couldn't fix a chunk that
+has neither the right embedding neighborhood nor the right vocabulary.
+
+Real output — the regression, same question structure, different question
+(produced by `generate.py::answer_from_chunks`):
+
+```
+Question: What's the best time of year to visit Brightwater, and why?
+
+Based on the provided documents, late May is arguably the best week of the year to visit Brightwater because days are long, everything is running, and the students have left (*guide_seasons.md*).
+
+Additionally, September is noted as the other "sweet spot" because it is warm, quiet, and everything is still open (*guide_seasons.md*).
+```
+
+Before the change, this question's answer cited both `guide_brightwater.md`
+and `guide_seasons.md` in all 3 runs. After, `python app.py ask "..."
+--show-prompt` shows why: the `guide_brightwater.md` chunk retrieved is now
+its "Getting there" section (train times, no airport) instead of its "When to
+go" section (the actual May/June recommendation) — the BM25 pass pulled in a
+different, irrelevant chunk from that same file and displaced the one that
+mattered.
+
+**Did it help?** No. It didn't fix the question it was chosen for — the
+target chunk's wording ("service," not "bus") meant BM25 had nothing to grab
+onto — and it broke a previously-working citation on a different question by
+letting an irrelevant chunk from the same file outrank the relevant one.
+Criterion 5 went from 3 of 4 eligible hits to 1 of 4. Everything else
+(criteria 1–4) held steady. I'm keeping the change in the shipped code rather
+than quietly reverting it, because "one change, measured" is supposed to
+include the case where the measurement says no.
 
 ## What's Still Broken
 
-<!-- For each criterion still missed after your fix: what you'd do about it,
-     and why you stopped where you did.
+**Criterion 5 (still missed, now worse).** Two separate problems, both at the
+retrieval stage: (1) `guide_regional_transport.md`'s "Buses" section has never
+once been retrieved for the Kestrelford-transport question, under either
+semantic or hybrid search, because it doesn't share enough meaning *or*
+vocabulary with "without a car" — fixing this would need either a much larger
+top-k, or a chunk that includes a synonym bridge ("bus service" rather than
+just "service"). (2) Hybrid search's BM25 pass has no way to tell "relevant to
+this file's topic" from "relevant to this query," so it can promote any
+chunk from a file that scored well on place-name overlap, not just the chunk
+that actually answers the question. If I kept working on this, I'd revert
+`HYBRID_SEARCH` to `False` by default and only enable it per-query when a
+question contains a proper noun with no close semantic match in the top
+results — a narrower trigger than "always on."
 
-     "I ran out of time" is fine if it's true. Pretending nothing is left is
-     not.
-
-     Milestone 5. -->
+I ran out of time to try that narrower version, which is a real stopping
+point, not a cosmetic one — building a reliable "when does BM25 actually
+help" heuristic is its own small project.
 
 ## What I'd Do Differently
 
-<!-- Knowing what you know now — which of your five criteria would you write
-     differently, and why?
-
-     Milestone 5. -->
+Criteria 1 and 3 I'd tighten to 5 of 5 — across 2 full test runs (6 total
+passes) neither one came within a full question of missing, so "4 of 5" turned
+out not to be where this system's real risk lives. Criterion 5, on the other
+hand, I'd keep at 4 of 5 but rewrite the question set behind it: right now only
+4 of my 5 general test questions happen to be genuine cross-cutting cases, and
+one criterion built on an accidental subset of another criterion's question
+list is more fragile than it looks. Next time I'd write 5 questions
+specifically designed to duplicate a fact across a town guide and a
+cross-cutting guide, rather than discovering after the fact that only 4 of my
+general-purpose questions qualified.
